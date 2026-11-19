@@ -14,3 +14,13 @@ Get more details from documents below:
 [Coxy Wallet Engine](https://github.com/wimsio/universities/wiki/Coxy-Wallet-Engine:-Complete-Technical-and-Deployment-Tutorial)
 
 [Wallet Features On Demand](https://github.com/wimsio/universities/wiki/Blockchain-Wallets-%E2%80%90-Coxy-Wallet:-Features-on-Demand)
+
+I recommend you start with Coxy Wallet Silver for complete blockchain new comers here https://coxygen.co/universities/
+
+<img alt="image" src="https://github.com/user-attachments/assets/7a7e4f62-277c-43ad-8f26-16f056bac2a1" />
+
+The stand alone Coxy Wallet Gold is under development and we invite you to be part of it. It is running on testnets and is hosted here https://coxywallet.co/
+
+<img alt="image" src="https://github.com/user-attachments/assets/40c2111a-c8af-41f5-805f-d8b0f94fd13b" />
+
+
