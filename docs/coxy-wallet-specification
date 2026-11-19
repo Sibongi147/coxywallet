@@ -1,0 +1,1481 @@
+Coxy Wallet Engine: Complete Technical and Deployment Tutorial
+
+**Version:** Documentation edition 1.0 (19 October 2026)  
+**Reviewed software baseline:** Coxy Wallet v0.7.x R3.4.2 + additive v0.8.0 + v0.9.0 Phase A and Phase B R2 registration hotfix  
+**Audience:** PHP developers, system administrators, merchants, dApp developers, test engineers, security reviewers and hosting providers  
+**Primary hosting target:** Apache/PHP/MySQL-compatible shared hosting, cPanel or DirectAdmin; dedicated HTTPS wallet origin preferred  
+**Release classification:** Testnet/staging engineering documentation, NOT an audited mainnet release or a certified Softaculous package
+
+> **Critical status disclosure**: This document explains the actual released code and the planned installation/distribution architecture. The latest integrated and end-user-tested work is v0.9.0 Phase B on staging, including the tenant registration UX fix. The uploaded v1.0.0 installer is a *preview candidate*, not a safe drop-in upgrade of the current installation. Softaculous integration is a future packaging and hosting-acceptance step. A green static diagnostic is not proof of safe mainnet custody, tenant isolation or reliable payments.
+
+## Contents
+
+1. [Purpose and product concept](#1-purpose-and-product-concept)
+2. [Version and feature status](#2-version-and-feature-status)
+3. [Architecture and trust boundaries](#3-architecture-and-trust-boundaries)
+4. [How the system works: the complete flows](#4-how-the-system-works-the-complete-flows)
+5. [Recommended folder structures](#5-recommended-folder-structures)
+6. [File-by-file module reference](#6-file-by-file-module-reference)
+7. [Requirements and environment preparation](#7-requirements-and-environment-preparation)
+8. [Source packages and release integrity](#8-source-packages-and-release-integrity)
+9. [Linux local setup and CLI testing](#9-linux-local-setup-and-cli-testing)
+10. [Database design and versioned migrations](#10-database-design-and-versioned-migrations)
+11. [Manual remote hosting installation and upgrade](#11-manual-remote-hosting-installation-and-upgrade)
+12. [One-time installer design and fresh-install requirements](#12-one-time-installer-design-and-fresh-install-requirements)
+13. [Softaculous package and distribution path](#13-softaculous-package-and-distribution-path)
+14. [Tenant registration and external dApp integration](#14-tenant-registration-and-external-dapp-integration)
+15. [Authorization, SDK and mobile-browser workflows](#15-authorization-sdk-and-mobile-browser-workflows)
+16. [Customer payment lifecycle and reconciliation](#16-customer-payment-lifecycle-and-reconciliation)
+17. [Blockchain adapter reference](#17-blockchain-adapter-reference)
+18. [Administrator diagnostics and health checks](#18-administrator-diagnostics-and-health-checks)
+19. [End-user and security testing matrix](#19-end-user-and-security-testing-matrix)
+20. [Security architecture and threat controls](#20-security-architecture-and-threat-controls)
+21. [Logging, incident handling, backup and recovery](#21-logging-incident-handling-backup-and-recovery)
+22. [How to add a new blockchain or framework adapter](#22-how-to-add-a-new-blockchain-or-framework-adapter)
+23. [Frequent installation and integration failures](#23-frequent-installation-and-integration-failures)
+24. [Product advantages, limitations and future roadmap](#24-product-advantages-limitations-and-future-roadmap)
+25. [Release acceptance checklist](#25-release-acceptance-checklist)
+26. [Official technical references](#26-official-technical-references)
+
+## 1. Purpose and product concept
+
+Coxy Wallet Engine is an **operator-self-hosted Web3 integration layer**. Its intended job is to let a conventional website or web application request wallet connections, signed transactions and cryptocurrency payments without inventing a new wallet, JSON-RPC proxy, consent system, chain-adapter library and merchant reconciliation engine for each website.
+
+Three actors have distinct responsibilities:
+
+- **Customer or wallet user:** Controls their own wallet account, sees consent prompts and explicitly approves sensitive operations. For supported browser-vault operations, key handling and signing occur in the user's browser, not in the tenant admin screen. Recovery and hardware protections depend on the device/vault feature used.
+- **Website or dApp operator (tenant):** Registers the exact site origin, owns one or more applications, selects permitted scopes, creates merchant payment intents where supported, and monitors their own payment states.
+- **Wallet installation operator:** Deploys the PHP application, controls private server configuration and chain RPC allowlists, protects the database, manages the platform tenant registry, handles software updates and activates features after acceptance tests.
+
+The design targets PHP, MySQL/MariaDB, Apache and modest hosting resources. A JavaScript SDK connects non-PHP applications as well, but integration compatibility has to be tested framework by framework. A truly universal client integration is a **goal**, not a fully verified claim.
+
+### 1.1 What "self-hosted" means
+
+The website owner runs their own wallet service and its server-side permissions, intent storage and RPC gateway. Users still interact with public blockchains and may depend on external network providers. Running the server does **not** mean that the server should hold customers' wallet recovery words or spend customer funds.
+
+The operator is responsible for patching, HTTPS, database availability, backups, abuse response and audit logs. Separating the wallet from potentially untrusted merchant application JavaScript is essential.
+
+### 1.2 What "extension-free" means
+
+The core wallet's supported browser-based vault/approval flows can be used in ordinary phone browsers when the browser and device support the required security primitives. This is **not** a promise that all chains and all dApps work without browser extensions today. In particular, the currently integrated Midnight Lace connector requires an injected Midnight-compatible wallet; an ordinary browser without one cannot use that connector. Other v0.7 chain adapters may be balance readers only.
+
+### 1.3 Primary use cases
+
+Online stores, LMS course purchases, university portals, subscriptions, charity donations, ticketing, creator contests, marketplaces, invoicing, gaming, tokenized memberships and user-managed Web3 applications. Each use case must define required network, token, confirmation policy, refunds, legal requirements and risk controls separately.
+
+## 2. Version and feature status
+
+| Version or milestone | Components actually available in reviewed material | Production limitation |
+|---|---|---|
+| v0.6.1 R3 base | Ethereum Sepolia send/sign flow with dynamic gas handling; existing Cardano Preprod wallet paths | Successful *testnet* transfer reported; Mainnet remains gated |
+| v0.7.x R3.4.2 | Independent chain adapters, same-origin read-only RPC gateway, network diagnostics, ETC provider fixes and Lace read-only connection | Most new networks do not offer local signing/sending in this package |
+| v0.8.0 integration | Cardano Preprod native assets, static unsigned CBOR/contract review and mint drafts | Features optional/flagged; not Plutus execution or mint broadcast |
+| v0.9 Phase A | Five tenant tables, default mapping, read-only migration inspector, staged updater verification | Tables alone do not enforce tenant security |
+| v0.9 Phase B R2 | Tenant API/UI, owner/admin/viewer controls, OAuth/signing/payment tenant guards, origin checks, friendly registration validation | Staging activation still needs end-to-end two-tenant and payment tests |
+| v1.0.0 upload | Fresh-install web wizard, private bootstrap/setup candidates, production/audit gates | Preview contains older components and incomplete fresh schema path; **do not overwrite current wallet** |
+| Softaculous | Package format and hosting plan documented | No proven custom-script deployment or public-catalog approval yet |
+
+**Current acceptance state:** v0.9.0 Phase B diagnostic `ENABLED_LIVE_VERIFICATION_REQUIRED`. This confirms installed hooks and active staging flag, not completion of real two-tenant security tests.
+
+### 2.1 Do not confuse the release version with installed capabilities
+
+Do not change the `installed.lock` contents solely to display v1.0.0. Record versions only after installing the corresponding verified source and passing migrations. The lock prevents reinstall; it is not proof of an audited codebase. A user-visible v0.7.x headline may coexist with v0.8/v0.9 modules in an incremental installation; the admin release manifest should report each independently.
+
+## 3. Architecture and trust boundaries
+
+### 3.1 Layered system diagram
+
+```mermaid
+flowchart TD
+    U[Customer on phone or desktop] --> D[Merchant website / LMS / dApp]
+    D --> S[JavaScript SDK / redirect integration]
+    S <--> W[Dedicated HTTPS Coxy Wallet origin]
+    W --> P[Public PHP API and OAuth gateway]
+    P --> G[Tenant + permission + origin gates]
+    G --> DB[(Private tenant / audit / payment database)]
+    G --> SG[Signing request / payment intent policies]
+    SG --> B[User-approved browser-side wallet / vault]
+    B --> R[Allowlisted chain RPC gateway]
+    R --> C[Cardano / Sepolia / network adapters]
+    C --> N[(External testnet nodes and explorers)]
+    N --> RE[Independent receipt and reconciliation verifier]
+    RE --> DB
+    OP[Administrator diagnostics and emergency stop] --> G
+    OP --> R
+```
+
+This diagram illustrates the intended boundaries and integration flow, not a claim that every supported chain can already sign. The permission path runs *before* new payment or signing requests; the on-chain reconciliation path must be independent of browser callbacks.
+
+### 3.2 The five security zones
+
+1. **Merchant/dApp origin:** Treat arbitrary website JavaScript as untrusted. It can request permissions but must not access Coxy's decrypted keys.
+2. **Dedicated wallet browser origin:** Secure customer authorization and, for applicable chains, user-side vault operations. Other applications must not share its origin; a different URL path is not isolation.
+3. **Public PHP entrypoints:** Session/API routing, browser pages and a controlled same-origin RPC gateway. Public access must be minimized.
+4. **Protected PHP/database layer:** Private configuration, tenant policy, payment state and audited server capabilities. Located outside all public document roots.
+5. **External blockchain/network services:** Testnet RPC/indexer responses are untrusted until network ID, payload, units, recipient, amount and confirmation data are validated.
+
+**Important custody clarification:** `coxy-wallet-private` is the private **server-code/config** directory. It is not where a website operator should collect customers' wallet recovery words. Merchant infrastructure credentials and operator-controlled service settings belong here; individual user signing material should remain protected by the wallet user's browser/device or an audited external wallet boundary.
+
+### 3.3 Example dedicated-origin model
+
+| Function | Example HTTPS origin | Purpose |
+|---|---|---|
+| Wallet | `https://wallet.example.org` | Secure account/consent interface |
+| Merchant | `https://shop.example.org` | Customer checkout |
+| LMS | `https://academy.example.org` | Course payments and Web3 identity |
+| Test dApp | `https://demo.example.org` | Controlled integration tests |
+
+All four are distinct browser origins. They can be administered by the same organization but should have independently managed document roots and deployment permissions. An origin is `scheme://hostname[:port]`; `/demo` is a path, not a new origin.
+
+## 4. How the system works: the complete flows
+
+### 4.1 User onboarding
+
+The user opens the wallet over HTTPS, signs in and verifies their account. Depending on enabled features they may create or recover a wallet locally, choose an available testnet and view their public receive address. The backend should never ask the user to submit a recovery phrase for an administrator to store.
+
+### 4.2 Registering a dApp
+
+A platform admin creates a tenant (organization). A tenant owner or permitted administrator registers a dApp with its **exact HTTPS origin** and **exact callback URL**. The tenant controls the app's scopes and activation state. The server must prevent one origin from being claimed by two tenants and must prohibit new apps using the wallet origin itself. Website document-root independence must also be verified at the hosting level.
+
+### 4.3 Consent, authorization and connection
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Dapp as Merchant / dApp
+    participant Wallet as Coxy Wallet origin
+    participant Auth as Tenant + OAuth API
+    User->>Dapp: Click Connect Wallet
+    Dapp->>Wallet: Authorization-code request + PKCE + state
+    Wallet->>Auth: Validate origin, callback, tenant, scope, session
+    Auth-->>Wallet: Allow only registered active app
+    Wallet->>User: Display precise permissions
+    User->>Wallet: Explicitly approve or reject
+    Wallet-->>Dapp: One-time code at registered callback
+    Dapp->>Auth: Redeem code with PKCE verifier
+    Auth-->>Dapp: Restricted session / authorized account data
+```
+
+`address.read` permits only approved public-address access. `tx.request` is a **permission to request** a transaction, not permission to spend automatically. Every sensitive transaction must have a separate review and approval.
+
+### 4.4 Merchant payment example
+
+```mermaid
+sequenceDiagram
+    participant Shop as Merchant server
+    participant Wallet as Wallet application
+    participant User as Customer
+    participant RPC as Allowlisted chain provider
+    participant Ledger as Merchant reconciliation
+    Shop->>Ledger: Create unique order + signed payment intent
+    Ledger-->>Shop: Prepared intent and expiry
+    Shop->>Wallet: Customer-initiated checkout handoff
+    Wallet->>User: Show chain, recipient, amount, fees
+    User->>Wallet: Approve or cancel
+    Wallet->>RPC: Broadcast only after valid signing approval
+    RPC-->>Ledger: Transaction hash / receipt observations
+    Ledger->>RPC: Verify status, amount, network and confirmations
+    Ledger-->>Shop: Paid / pending / failed / uncertain state
+```
+
+**Never mark an order paid merely because a browser redirected back successfully.** Confirm the blockchain or provider settlement independently, and apply a per-chain finality/confirmation policy. If broadcast outcome is uncertain, reconcile first and **do not blindly resend**.
+
+### 4.5 Suspending or revoking a tenant
+
+Tenant policy must be checked at OAuth authorization, code exchange, token usage, signing creation, payment creation and merchant operation. Suspension blocks new sensitive actions and revokes usable authorizations. It does not reverse blockchain transactions already broadcast. History/reconciliation remains accessible to properly authorized operators for investigation.
+
+## 5. Recommended folder structures
+
+The actual uploaded packages use several internal paths. The directories below are the **deployed target layouts**, not a command to copy every preview ZIP over the same directory.
+
+### 5.1 Layout A: dedicated wallet subdomain (preferred)
+
+```text
+hosting-account/
+  domains/
+    wallet.example.org/
+      public_html/                     <-- HTTPS wallet document root
+        .htaccess
+        index.php
+        wallet-loader.php
+        api.php
+        admin.php
+        tenants.php
+        authorize.php
+        permissions.php
+        sign.php
+        pay.php
+        evm.php                      (when installed from the working R3 base)
+        adapters.php
+        chain-read-api.php
+        cardano-v080.php
+        diagnostic-v070.php
+        diagnostic-upgrade.php
+        diagnostic-tenant-v090.php
+        diagnostic-phase-b-v090.php
+        assets/
+          tenant-v090.mjs
+          tenant-v090.css
+          cardano-v080-panel.mjs
+          ... other JS/CSS modules
+        src/
+          adapters.mjs
+          midnight-lace.mjs
+        sdk/
+          coxy-connect.mjs
+          coxy-connect.global.mjs
+        demo/                         (staging only; never same-origin real dApp)
+        install/                      (one-time fresh-install candidate only)
+      coxy-wallet-private-isolated/    <-- sibling, NOT publicly served
+        bootstrap.php
+        settings.php
+        installed.lock
+        evm_testnet.php
+        chain_readonly.php
+        chain_readonly_extra.php
+        dapp_permissions.php
+        sign_api.php
+        payment_intents.php
+        tenant_v090.php
+        tenant_v090_gate.php
+        tenant_v090_policy.php
+        tenant_v090_inspector.php
+        updater_v090.php
+        cardano_v080_*.php
+        ... chain-specific private modules
+```
+
+Example installation settings for **root mode**:
+
+```php
+// Illustrative public URL values only. Edit the EXISTING protected settings
+// array; never replace the file with this snippet.
+'wallet_origin' => 'https://wallet.example.org',
+'wallet_base_path' => '',
+```
+
+`wallet_base_path` is the **public URL path**. The root installation uses an empty string. It is NOT `/coxy-wallet-private-isolated`, and the private directory must not be referenced by an HTTP URL.
+
+### 5.2 Layout B: wallet in a website folder (legacy/add-on mode)
+
+```text
+hosting-account/
+  public_html/
+    index.php                         (parent website)
+    coxy-wallet/                      <-- public URL /coxy-wallet/
+      index.php
+      api.php
+      wallet-loader.php
+      assets/
+      sdk/
+      ...
+  coxy-wallet-private/                <-- outside public_html
+    settings.php
+    bootstrap.php
+    installed.lock
+    ...
+```
+
+Illustrative public settings:
+
+```php
+'wallet_origin' => 'https://example.org',
+'wallet_base_path' => '/coxy-wallet',
+```
+
+Folder-mode deployments are useful for education and trials but place wallet JavaScript on the same browser origin as the parent website. A compromised parent application can endanger the signing UI. Prefer a dedicated origin for serious use.
+
+### 5.3 Critical hosting checks
+
+- Find the real `DOCUMENT_ROOT` in cPanel/DirectAdmin; never guess from a file-manager breadcrumb.
+- The private directory must be outside **every** configured public document root, not merely the wallet's own one.
+- The PHP runtime needs read/traverse access to private PHP but anonymous HTTP clients must not.
+- Keep backups, diagnostics that are CLI-only, raw SQL migration files, release archives and tests **out of public_html**.
+- Do not create another `coxy-wallet/` folder inside the dedicated-root installation.
+- Do not change the private-directory naming convention to fix an incorrect `wallet_base_path`.
+
+## 6. File-by-file module reference
+
+The following are real names represented in the reviewed releases. Some are optional, version-specific or absent from the base v1.0 preview. Check the release manifest before referencing them in code.
+
+### 6.1 Public PHP endpoints
+
+| File | Function | Security rule |
+|---|---|---|
+| `index.php` | Main wallet landing page, authentication navigation and wallet UI | Separate HTTPS wallet origin, CSP |
+| `wallet-loader.php` | Detects installation mode, private bootstrap and lock | Fail closed; never self-reinstall over existing data |
+| `api.php` | Common action dispatcher for sessions, wallet permissions, transactions and tenant actions | Authentication, CSRF, tenant authorization, rate limits |
+| `authorize.php` | Browser OAuth/permission consent | Exact origin/callback and explicit user decision |
+| `permissions.php` | User-facing permission management | Only own permissions; revocation effective immediately |
+| `sign.php` | Signing request UX | Exact chain/recipient/amount/fee review |
+| `pay.php` | Customer checkout UX | No payment success on browser callback alone |
+| `admin.php` | Existing wallet platform administration | Platform administrator only |
+| `tenants.php` | v0.9 tenant and dApp management | Owner/admin/viewer policy per tenant |
+| `adapters.php` | v0.7 read-only network/account lookup pages | Public address only, no signing for read-only adapters |
+| `chain-read-api.php` | Authenticated, bounded same-origin read-only RPC API | Fixed upstream allowlist, testnet network checks |
+| `evm.php` | Working EVM testnet page from v0.6.1 R3 baseline | Dynamic gas checks and separate approval |
+| `cardano-v080.php` | v0.8 Preprod native asset, review and unsigned draft UI | Operator flags and address-ownership gates |
+| `diagnostic-v070.php` | Chain adapter and provider tests | Signed-in test account; no secret inputs |
+| `diagnostic-upgrade.php` | v0.8/v0.9/v1.0 prerequisite checks | Administrator-only and read-only |
+| `diagnostic-tenant-v090.php` | Tenant database/mapping integrity | Aggregate counts; no customer record dumps |
+| `diagnostic-phase-b-v090.php` | Code-hook and tenant-gate deployment status | Does not substitute for live authorization tests |
+| `install/index.php` | One-time fresh-install wizard candidate | Ownership proof, empty installation and irreversible lock |
+
+### 6.2 Browser-side JavaScript and SDK
+
+| File | Function | Notes |
+|---|---|---|
+| `assets/tenant-v090.mjs` | Organization list, invitations, dApp registration, inline validation | R2 fixes form reset, 422 explanations and 409 conflicts |
+| `assets/tenant-v090.css` | Tenant administration styles | Pure UI |
+| `assets/evm-adapter.mjs`, `assets/evm-panel.mjs` | EVM browser interactions in original wallet engine | Preserve working gas/signing revisions |
+| `assets/native-vault.mjs`, `assets/device-prf.mjs` | Browser vault/device cryptographic helpers | Browser compatibility and recovery need real device testing |
+| `assets/native-cardano.mjs` | Native Cardano browser support | Keep signing separate from admin |
+| `assets/cardano-v080-panel.mjs` | v0.8 Cardano assets/review UI | Read/unsigned operations by default |
+| `assets/adapters-v070.mjs` | v0.7 multichain lookup UI | Read-only adapters |
+| `src/adapters.mjs` | Shared client network catalogue and adapter helpers | Chain/network/units must agree with PHP |
+| `src/midnight-lace.mjs` | Browser wallet-discovery and read-only Lace connector | Requires an injected Midnight connector |
+| `sdk/coxy-connect.mjs` | External dApp JavaScript integration | Client ID, wallet origin, PKCE/callback flow |
+| `sdk/coxy-connect.global.mjs` | SDK packaging for non-module integration | Verify exact installed API before use |
+
+### 6.3 Protected PHP modules
+
+| File | Function | Operator responsibility |
+|---|---|---|
+| `bootstrap.php` | Private application initialization/DB and configuration loader | Correct deployment variant, outside webroot |
+| `settings.php` | Private operator configuration | Never send to support or include in a release ZIP |
+| `installed.lock` | Marks completed installation | Retain; never synthesize or overwrite during upgrades |
+| `evm_testnet.php` | Testnet EVM policies and RPC/signing operations | Keep the Sepolia R3 dynamic gas implementation |
+| `chain_readonly.php`, `chain_readonly_extra.php` | Strict network reads, endpoint policy and diagnostics | Fixed testnet-only providers, TLS and identity checks |
+| `preprod_*` | Cardano Preprod provider/build/firewall support | Preprod-only, contracts separately verified |
+| `cardano_v080_api.php` | v0.8 Cardano API dispatch | Scope and feature flags |
+| `cardano_v080_assets.php` | Linked Preprod asset and UTxO reads | Decimal-string-safe accounting |
+| `cardano_v080_cbor.php` | Bounded CBOR parser | Reject invalid and oversized unsigned payloads |
+| `cardano_v080_review.php` | Static review/collateral assessment | Not an on-chain Plutus simulation |
+| `cardano_v080_mint.php` | Unsigned native-policy mint draft | Never claim minted tokens without confirmation |
+| `dapp_permissions.php` | Token/scope checks | Active tenant and client on every privileged call |
+| `sign_api.php` | Signing request policy gateway | User consent and signing transaction invariants |
+| `payment_intents.php` | Payment creation, state checks and merchant policy | Idempotency, immutable details, reconciliation |
+| `tenant_v090.php` | Tenant operations/registered apps | Owner/admin/viewer ACL and validation |
+| `tenant_v090_gate.php` | Tenant suspension, origin ownership and merchant guards | Fail closed on wrong/missing identity |
+| `tenant_v090_policy.php` | Shared tenant policy helpers | No direct user-controlled tenant bypass |
+| `tenant_v090_inspector.php` | Schema and mapping diagnostics | Read-only aggregate inspection |
+| `updater_v090.php` | Signed update verification module | Apply remains disabled pending release review |
+
+### 6.4 Which files should *not* ship in the public site
+
+- Test runner scripts, test fixture credentials, source archives, SQL dumps, private settings or database backups.
+- Private PHP modules or wallet service credentials.
+- `INSTALL_PROOF` material, one-time setup payload, installer internals after completion.
+- Source maps or logs that expose privileged flows, tokens or unnecessary customer information.
+
+Some browser-side `vendor/*.js` dependencies are public assets by design. Do not indiscriminately block required browser libraries; determine public/private placement per file.
+
+## 7. Requirements and environment preparation
+
+| Dependency | Minimum checked by current v1.0 diagnostics | Recommended deployment guidance |
+|---|---|---|
+| PHP | 8.2+ | A currently supported, security-patched PHP release compatible with all dependencies; validate per-host |
+| Web server | Apache or compatible shared-hosting configuration | HTTPS with controlled document root, no misrouted `.mjs` assets |
+| Database | PDO MySQL/MariaDB | Dedicated least-privilege application access; versioned backups |
+| Crypto extension | Sodium | Required for supported cryptographic operations; do not improvise crypto |
+| HTTP client | cURL/OpenSSL | TLS peer/hostname checks on, outbound HTTPS enabled |
+| ZIP extension | ZipArchive | Needed for installation/update-verification paths |
+| Other PHP | JSON, PDO, filter/session support | Verify all features on the *web* PHP handler |
+| Browser | Modern Chrome, Firefox, Safari or Edge | Secure context, Web Crypto, IndexedDB; test exact device |
+| Test runner | CLI PHP and optional Node.js | Development-only, not necessarily installed on shared hosting |
+| Hosting control | cPanel or DirectAdmin | File Manager, domain manager, SSL, phpMyAdmin and logs |
+
+A cPanel host may expose multiple PHP versions; the terminal's `php` CLI version may differ from the selected web virtual host's version. Use cPanel **MultiPHP Manager** to verify the affected domain's version.
+
+### 7.1 Local PHP inventory (read-only)
+
+```bash
+php -v
+php -m
+php -r 'foreach (["PDO", "pdo_mysql", "sodium", "curl", "zip", "openssl"] as $e) { echo $e, ": ", extension_loaded($e) ? "PASS" : "MISSING", PHP_EOL; }'
+php -r 'echo "PHP_VERSION_ID=", PHP_VERSION_ID, PHP_EOL;'
+node --version   # Optional: JavaScript tests only
+```
+
+No secrets are required for these commands. PHP extension names and availability can differ between distributions.
+
+### 7.2 HTTP response checks
+
+```bash
+curl --head https://wallet.example.org/
+curl --head https://wallet.example.org/assets/tenant-v090.mjs
+```
+
+An authenticated page may redirect to sign-in. A served `.mjs` module must use a suitable JavaScript MIME type. Never expose a general-purpose private diagnostics endpoint just to print the PHP configuration.
+## 8. Source packages and release integrity
+
+### 8.1 The reviewed artifacts and why their order matters
+
+| Artifact class | Correct use |
+|---|---|
+| Original v0.6.1 source and v0.6.1 R3 gas-fix overlay | Preserve successful Sepolia send path |
+| v0.7 base plus R3.x incremental adapter overlays | Adds network readers, provider diagnostics and later Lace/ETC fixes |
+| `v0.8.0_on_v0.7_R3.4.2_Upgrade...zip` | Additive Cardano v0.8 bridge and upgrade diagnostics |
+| `v0.9.0_Phase_A_Tenant_Migration_Diagnostics.zip` | Tenant schema, guarded default mapping and preflight |
+| `v0.9.0_Phase_B_Guarded_Tenant_Integration.zip` | Tenant API/UI and backend permissions; staging activation |
+| `v0.9.0_Phase_B_Tenant_Reset_Hotfix.zip` | Frontend bug fix after first tenant creation |
+| `v0.9.0_Phase_B_R2_Dapp_Registration_Guidance.zip` | Final documented UX and server-origin guard hotfix; includes reset corrections |
+| `v1.0.0_Self_Hosted_Install_Candidate.zip` | Reference for a **future repaired fresh installer**, not a current-wallet replacement |
+
+**Do not blindly unzip one archive over another.** Some ZIPs contain paths such as `public_html/coxy-wallet/` intended for a folder installation. On a dedicated-origin installation these paths must be mapped to `public_html/` directly. Older preview archives include `index.php`, `api.php` or `evm_testnet.php` versions that would erase later repairs.
+
+### 8.2 Work from a versioned, reviewable source tree
+
+Suggested source-control layout for future releases (proposed improvement):
+
+```text
+coxy-wallet-engine/
+  app/public/                   <-- browser-facing PHP, JS, CSS and SDK
+  app/private/                  <-- private PHP templates WITHOUT live settings
+  database/migrations/         <-- additive, numbered schema changes
+  packaging/manual/
+  packaging/softaculous/       <-- future custom package
+  tests/php/
+  tests/js/
+  tests/integration/
+  tests/e2e/
+  docs/
+  CHANGELOG.md
+  RELEASE_MANIFEST.json
+  SHA256SUMS.txt
+```
+
+Never commit live `settings.php`, operator credentials, browser vaults or database exports. Use placeholders in a documented example file. Maintain a clean, signed or independently checksum-verified release manifest.
+
+### 8.3 Archive verification on Linux (safe, read-only)
+
+```bash
+# Run in a directory containing a release ZIP you obtained from a trusted source.
+unzip -t Coxy_Wallet_RELEASE.zip
+sha256sum Coxy_Wallet_RELEASE.zip
+
+# Extract to a temporary, NONPUBLIC workspace for inspection.
+mkdir -p "$HOME/coxy-release-review"
+unzip -q Coxy_Wallet_RELEASE.zip -d "$HOME/coxy-release-review"
+cd "$HOME/coxy-release-review"
+
+# Where a matching verified SHA256SUMS.txt is supplied:
+sha256sum -c SHA256SUMS.txt
+```
+
+A checksum confirms file integrity **against its expected hash**; it does not authenticate a compromised manifest. For the production updater use a signature verified against an independently trusted release-signing public key, plus immutable release identifiers, downgrade prevention and rollback tests.
+
+### 8.4 Classify file changes before an upgrade
+
+A safe release manifest should identify `new`, `modified`, `migration`, `config-template-only`, `must-preserve` and `never-overwrite` files. Special review is required for `api.php`, `authorize.php`, `wallet-loader.php`, `bootstrap.php`, `sign_api.php`, `payment_intents.php`, `evm_testnet.php` and existing browser-vault JavaScript.
+
+## 9. Linux local setup and CLI testing
+
+### 9.1 Recommended development workstation
+
+Use a current Linux distribution, a supported PHP version, CLI PHP extensions, Node.js for JavaScript tests, a local MySQL/MariaDB server or disposable SQL service, `git`, `unzip` and `curl`. A full Node production server is *not* required for this PHP shared-hosting architecture. Composer is not a mandatory runtime dependency of the reviewed core package; individual future PHP libraries may use Composer if declared by their own package manifests.
+
+Work only with sanitized test data and **throwaway testnet accounts**. Do not copy real browser vault databases or customer recovery information into a development fixture.
+
+### 9.2 Minimal local verification sequence
+
+```bash
+php -v
+node --version
+unzip -t Coxy_Wallet_RELEASE.zip
+
+# From the extracted package root; see actual paths with 'find'.
+find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+
+# JavaScript syntax checks, run on relevant files in their extracted package.
+node --check public_html/coxy-wallet/assets/tenant-v090.mjs
+```
+
+The JavaScript path above is an example from the Phase B package, not a universal path in every ZIP. Syntax checks establish only that the parser accepts the source; they do not check authorization or ledger semantics.
+
+### 9.3 Version-specific unit tests
+
+Run each command from **the root of the matching extracted package**, where the corresponding `tests/` directory exists:
+
+```bash
+# v0.8 bridge
+php tests/test_v080_offline.php
+php tests/test_integration_static.php
+
+# v0.9 Phase A
+php tests/run_php_checks.php
+
+# v0.9 Phase B
+php tests/test_phase_b.php
+
+# v0.9 Phase B R2 registration hotfix
+node --test tests/tenant_registration.test.mjs
+php tests/origin_guard.test.php
+
+# v0.7 R3.4.2 ETC and Lace addon
+php tests/test-v070-r342-etc.php
+node --test tests/r342-midnight-lace.test.mjs
+```
+
+**These packages are incremental**, so some tests depend on files provided by a prior baseline or a selected fixture. Missing fixture/module errors mean you have not assembled the required test workspace, not that the blockchain or deployment is healthy. Read each package's `README_FIRST.md` and `TEST_RESULTS.md` and compare the commands against actual file paths.
+
+### 9.4 Integration tests need stronger environments
+
+A full test environment must include a test database and an HTTPS wallet origin plus a **different** HTTPS dApp origin. Plain PHP's built-in server does not honor Apache `.htaccess`, does not reproduce cPanel ownership/permissions and does not by itself establish a trustworthy public HTTPS origin. Use it only for isolated developer experiments, never to certify the installer or transaction custody.
+
+Example of an intentionally nonproduction local launch (synthetic fixtures only):
+
+```bash
+php -S 127.0.0.1:8000 -t ./public_html
+```
+
+For OAuth, secure-context browser cryptography and testnet wallet operations, use a real HTTPS staging vhost or a trusted local HTTPS reverse proxy with a valid local trust chain. Never loosen TLS or CSP rules in staging to make tests pass.
+
+### 9.5 A sensible automated test pyramid
+
+1. **Static/source checks:** PHP/JS syntax; architecture invariants; no public private files; module existence.
+2. **Unit tests:** Address/amount validation, tenant policy, exact URL parsing, CBOR parsing, gas arithmetic, payment idempotency, signed-update verification.
+3. **API integration:** Real disposable MySQL; session/CSRF/PKCE/origin checks; transaction rollback; deterministic provider stubs.
+4. **Hosting/browser E2E:** Apache rewrite/MIME, HTTPS, cookies, real OAuth redirects, mobile browser reload/recovery and timeout behavior.
+5. **Testnet acceptance:** Operator-controlled funded addresses, actual chain IDs, fees, receipt confirmation and reconciliation.
+6. **External audit and adversarial testing:** Independent assessment before unrestricted signing or Mainnet.
+
+## 10. Database design and versioned migrations
+
+### 10.1 Key schema families
+
+The reviewed fresh baseline has `cwe_users`, `cwe_email_tokens`, `cwe_dapps`, `cwe_accounts`, `cwe_wallet_challenges`, `cwe_authorizations`, `cwe_access_tokens`, `cwe_rate_limits` and `cwe_audit`. Later scripts add signing, Preprod transfer and merchant payment tables/columns; exact definitions must be taken from the corresponding numbered migration rather than guessed.
+
+Phase A of v0.9 adds five concrete tables:
+
+| Table | Purpose |
+|---|---|
+| `cwe_tenants` | Organization identity, slug, lifecycle state |
+| `cwe_tenant_members` | User-to-tenant membership and role |
+| `cwe_dapp_tenants` | Registered dApp to tenant ownership mapping |
+| `cwe_tenant_origins` | Unique HTTPS origin claims and ownership |
+| `cwe_tenant_audit` | Traceable tenant lifecycle, membership and policy events |
+
+These tables **do not themselves authorize traffic**. The backend still must check tenant ownership for every object ID, OAuth exchange, bearer read, signing request and checkout operation. A caller-supplied `tenant_id` is not trustworthy merely because it exists in the database.
+
+### 10.2 Correct Phase A migration order on an existing wallet
+
+1. Back up the entire source, private directory and database. Verify restoration on a disposable host.
+2. Check matching primary-key/foreign-key types and table engines in `INFORMATION_SCHEMA`.
+3. Run the reviewed `01_upgrade_v0.9.0_multitenant.sql` with phpMyAdmin on staging.
+4. Review existing tenants, origins and owner accounts **before** running `02_seed_default_tenant_REVIEW_FIRST.sql`.
+5. The guarded seed should map legacy apps to the default tenant without creating unauthorized new owners.
+6. Run the tenant diagnostic; expect `SCHEMA_AND_MAPPING_READY` with zero unmapped dApps and origin collisions, and at least one active default owner.
+7. Only after verifying the matching Phase B code and hooks, activate its guard on isolated staging.
+
+A migration that fails halfway must be reconciled against database state. Do not rerun destructive SQL or manually delete origin ownership rows just to hide diagnostic failures.
+
+### 10.3 Safe read-only SQL preflight
+
+```sql
+SELECT TABLE_NAME
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME IN (
+    'cwe_tenants',
+    'cwe_tenant_members',
+    'cwe_dapp_tenants',
+    'cwe_tenant_origins',
+    'cwe_tenant_audit'
+  )
+ORDER BY TABLE_NAME;
+```
+
+For an existing registered origin, **an authorized administrator** can inspect ownership without changing it:
+
+```sql
+SELECT o.origin, t.slug, t.status
+FROM cwe_tenant_origins AS o
+JOIN cwe_tenants AS t ON t.id = o.tenant_id
+WHERE o.origin = 'https://demo.example.org';
+```
+
+Do not expose this ownership query through an anonymous endpoint. The normal registration UI should say "already assigned" without revealing another tenant's identity.
+
+### 10.4 Fresh-install SQL blocker in the uploaded v1.0 preview
+
+The inspected v1.0.0 ZIP includes `schema.sql`, `payment_tables_v0.5.2.sql` and the v0.9 migration scripts in `_setup_payload/database/`. However, its installer references **do not include** both `upgrade_v0.5.1_dapp_permissions.sql` and `upgrade_v0.5.2_payment_connector.sql` in the execution path. This leaves a risk that a fresh database lacks intermediate permission/payment columns later modules expect.
+
+**Required fix before a public fresh-install release:** produce an ordered, idempotent, clean-database migration plan; reconcile duplicate schema constructs; add a post-install schema manifest test; and verify fresh install and upgrade land on the same effective schema. Do not merely report installation success because `schema.sql` imported.
+
+## 11. Manual remote hosting installation and upgrade
+
+### 11.1 cPanel or DirectAdmin preflight
+
+- Select a dedicated hostname such as `wallet.example.org` and confirm its exact document root in Domains.
+- Configure a valid TLS certificate; enforce HTTPS before wallet use.
+- Select the appropriate supported PHP version and confirm PDO MySQL, Sodium, cURL, OpenSSL and ZipArchive.
+- Ensure a protected private directory can be created as a sibling of the document root (and is outside all other vhosts' webroots).
+- Confirm cPanel File Manager or SFTP, phpMyAdmin, web/PHP error logs and backup/restore facilities.
+- Ensure outbound HTTPS to the intended testnet providers works without disabling SSRF, TLS or URL allowlist protections.
+- Document operator-owned domains, path mapping, test database scope, immutable release checksums and a rollback plan.
+
+### 11.2 Installed wallet: recommended update procedure for the present v0.9 staging system
+
+Your existing Phase B staging site is an **upgrade**, not a fresh install. Do the following instead of rerunning `install/`:
+
+1. Freeze changes to registered dApps and merchant payment configuration during the deployment window; reconcile uncertain prior transactions.
+2. Take an encrypted backup of public source, protected PHP, installed lock and complete database. Independently test a restore.
+3. Confirm the dedicated-root layout and `wallet_base_path => ''` if the wallet serves directly at the hostname root.
+4. Review each intended hotfix diff, checking the deployed module's hash/version against the archive baseline.
+5. Map `public_html/coxy-wallet/assets/tenant-v090.mjs` in the ZIP to `public_html/assets/tenant-v090.mjs` on the dedicated-root installation.
+6. Map `coxy-wallet-private/tenant_v090.php` to the existing sibling `coxy-wallet-private-isolated/tenant_v090.php`; preserve private operator settings and the installation lock.
+7. Preserve `api.php`, EVM R3, the transaction ledger and any locally integrated v0.8 changes unless a **reviewed patch** explicitly modifies them.
+8. Bump browser asset cache versions where documented, then hard-refresh.
+9. Check read-only diagnostics before and after; make the Phase B flag change only on staging.
+10. Exercise tenant A/B access, OAuth, payments, provider reads and regression tests; only then record the release in a deploy manifest.
+
+### 11.3 Stage-safe Phase B switch
+
+Only in the existing protected configuration array, and only after the code is installed on staging:
+
+```php
+// Illustrative configuration item. Not a complete settings.php.
+'tenant_v090_phase_b_enabled' => true,
+```
+
+**Important:** Edit this key only in the existing protected staging configuration, and preserve the surrounding PHP array. Leave it disabled on live customer installations until all Phase B security tests pass.
+
+Expected diagnostic progression:
+
+| Status | Interpretation |
+|---|---|
+| `SCHEMA_AND_MAPPING_READY` | Phase A relational schema and mapping checks pass |
+| `READY_TO_ACTIVATE_ON_STAGING` | Phase B hooks installed; activation off |
+| `ENABLED_LIVE_VERIFICATION_REQUIRED` | Phase B enabled; live tenant and payment testing still required |
+| `PASS` on individual checks | One specified property checked, not production authorization certification |
+
+### 11.4 File permissions
+
+Set permissions according to the server's PHP execution model and filesystem ownership; there is **no universal correct numeric mode** across all shared hosts. Typical deployments use non-world-writable source files and protected private configuration readable only by the app's trusted account. Do not recursively set all files to `777`. When `open_basedir` prevents reading a legitimate private sibling directory, work with the host on a reviewed allowlist change, not by relocating private code into public HTML.
+
+### 11.5 Safe rollback
+
+1. Disable new signing/checkout creation temporarily; preserve status/reconciliation endpoints.
+2. Restore matching public source and private code from the same snapshot.
+3. Restore the database only when compatibility or corruption analysis shows it is necessary, and account for changes made since the snapshot.
+4. Keep transaction histories and uncertain transfer states; blockchain sends cannot be rolled back by restoring SQL.
+5. Clear OPcache where supported, hard-refresh assets, check error logs and verify old OAuth permissions before re-enabling sensitive requests.
+6. Keep the original `installed.lock`, vault metadata and recovery procedure intact.
+
+## 12. One-time installer design and fresh-install requirements
+
+### 12.1 What the uploaded v1.0 installer is
+
+The reviewed v1.0.0 archive contains a conventional `coxy-wallet/` public folder, a temporary `_setup_payload/` area, `install/index.php`, a private PHP bootstrap template and initial SQL migration files. It is a **candidate** for a fresh-install flow; it has not been proven compatible with the latest v0.7/v0.8/v0.9 integrated source and still needs the migration-path repair described in section 10.4.
+
+Do **not** take the v1.0 archive, extract it over an existing v0.9 staging wallet, or regenerate its database/account/installed lock.
+
+### 12.2 Required behavior of a future repaired installer
+
+1. Detect **folder mode** versus **dedicated-root mode** from the effective vhost document root.
+2. Require a fresh empty destination or an explicitly vetted upgrade plan; refuse a pre-existing installation lock.
+3. Verify PHP features, session storage, storage isolation, HTTPS and private-directory access.
+4. Create a one-time hosting ownership proof with a short expiry; accept it only through a secure installation step. Never include its value in support messages.
+5. Gather only necessary installation data through trusted UI; never ask for end-user wallet recovery phrases or PINs.
+6. Create the protected private server configuration and a stable installation identity in the correct private directory.
+7. Apply the **entire ordered** schema and versioned migrations, with checks for presence of critical permission/payment columns.
+8. Create one initial platform administrator and explicit default tenant ownership, with narrowly scoped permissions.
+9. Lock installation irreversibly from anonymous web requests, disable/remove setup payload and deny direct access to private files.
+10. Run read-only post-install checks, report the exact version and capability flags, and keep signing/Mainnet disabled until acceptance tests pass.
+11. On partial failure, fail safely with a recoverable maintenance state rather than pretending installation completed.
+
+### 12.3 Two independent installer test modes
+
+**Fresh:** Clean test hosting account, clean database, never-installed domain, all migrations applied, initial admin created, installer locked.
+
+**Upgrade:** Already installed prior version, no re-creation of users or keys, planned migrations only, existing payments and authorizations preserved, deterministic downgrade/rollback policy.
+
+Do not combine these into one ambiguous "install or upgrade" button. Each mode has different data-preservation and ownership requirements.
+
+### 12.4 Must-fail tests
+
+- Open `/install/` after a completed install: refuse reinstallation (the original candidate's intended locked state).
+- Attempt GET access to private PHP or setup SQL: refuse or return 404/403.
+- Wrong ownership proof: reject without generating new admin.
+- Webroot already contains another application: refuse accidental overwrite.
+- DB migration partly applied: report a consistent recoverable error; never claim PASS.
+- Attempt to install into a public directory that exposes the private directory through another hostname: reject.
+- Missing cryptographic/runtime prerequisite: fail before accepting customer payments.
+
+## 13. Softaculous package and distribution path
+
+**Important:** A ZIP with `install/index.php` is **not** itself a Softaculous custom script. Softaculous has a documented software-vendor custom-package format, and adding a custom script to a host's Softaculous instance generally requires **hosting administrator/Softaculous Admin** access, often root-level panel access. A regular cPanel website owner usually cannot register an arbitrary custom script in the host's global Softaculous catalog.
+
+### 13.1 Official custom-package anatomy
+
+```text
+/var/softaculous/coxywallet/              <-- example host administrator location
+  info.xml                               <-- description, version, requirements
+  install.xml                            <-- guided installation settings
+  install.php                            <-- Softaculous installer callbacks
+  install.js                             <-- installation form checks
+  coxywallet.zip                         <-- release payload for NEW installations
+  coxywallet.sql                         <-- optional complete baseline SQL
+  fileindex.php                          <-- known installed files; uninstall semantics
+  upgrade.xml                            <-- optional versioned upgrades
+  upgrade.php                            <-- optional upgrade callbacks
+  upgrade.js                             <-- optional upgrade checks
+  images/                                <-- optional listing assets
+```
+
+These names, including Softaculous's installer function `__install()`, are documented in the official **Making Custom Package** guide. Treat this tree as the **required packaging plan**; the current v1.0 preview does not ship these as a tested Softaculous package.
+
+### 13.2 Design Softaculous installer fields
+
+**Safe fields to collect:** destination HTTPS domain, install path (empty for dedicated root), desired site title, non-secret admin contact, installer option for fresh/upgrade mode if supported by validated package, and installer-generated database target through the hosting panel's supported facilities.
+
+**Do not collect:** customers' wallet recovery words, arbitrary blockchain signing keys, existing PINs, website DB credentials in helpdesk/chat logs, or private merchant signing secrets in the public wizard. Any installation credential provided through the authorized host installer must be handled securely and never embedded in a public JavaScript bundle or query string.
+
+### 13.3 Step-by-step Softaculous development and validation
+
+1. **Freeze a canonical, complete release:** Assemble working R3 EVM, v0.7 adapters, v0.8, Phase B R2 and repaired v1.0 installer on one coherent repository revision. Remove obsolete alternate components.
+2. **Fix clean-install SQL:** Compare a clean installation against the upgraded database schema, including payment and dApp permission columns, indexes and tenant uniqueness constraints.
+3. **Create package metadata:** Write `info.xml`, `install.xml`, install callbacks and a safe file manifest. Use only Softaculous-supported installer inputs and callbacks.
+4. **Build the clean-install archive:** Do not bundle operator settings, wallet keys, live logs, database exports or browser vault content. Place private templates securely after verified installation.
+5. **Create upgrade metadata:** Add `upgrade.xml`/`upgrade.php` only after testing every supported upgrade path. Reject installs from unknown versions instead of forcing migration.
+6. **Build safe uninstall rules:** `fileindex.php` must not cause accidental deletion of another web app, customer database or user recovery material. Require explicit confirmation for destructive removal, with preserved backups where lawful and authorized.
+7. **Request host administrator testing:** On a licensed server, an administrator adds the package through Softaculous Admin > Custom Scripts. An ordinary cPanel user cannot assume this menu exists.
+8. **Exercise fresh install, upgrade, repair and rollback:** Test both directory modes with real domain/document-root mappings, strict HTTPS, PHP versions, OPcache and private sibling paths.
+9. **Publish only after host acceptance:** For wide availability, coordinate distribution/listing with the relevant hosting vendors and Softaculous. A host-specific custom script is not automatically a universal public Softaculous listing.
+
+### 13.4 Acceptance tests specific to Softaculous
+
+| Test | Required result |
+|---|---|
+| Clean installation on dedicated wallet subdomain | Correct public and private sibling directories |
+| Folder installation | Correct `wallet_base_path`, with shared-origin risk disclosed |
+| PHP and extension preflight | Refuses unsupported host |
+| SQL consistency | Same schema as a fully upgraded wallet |
+| Installer resume/retry | Recoverable, idempotent and not duplicate users |
+| Installer lock | Cannot start a second installation over existing wallet |
+| Registered dApp origin | Wallet origin cannot be registered as its own external dApp |
+| Softaculous backup/restore | Restores known files/DB while respecting browser-vault limits |
+| Upgrade | Exact manifest, staged migration, compatibility gate |
+| Uninstall | Does not silently erase externally held recovery material or other apps |
+| Separate mobile browser test | Wallet flows function under actual HTTPS and device capabilities |
+
+### 13.5 Official source
+
+- https://www.softaculous.com/docs/developers/making-custom-package/
+- https://www.softaculous.com/docs/admin/adding-custom-scripts/
+- https://www.softaculous.com/docs/api/api/
+
+Do not copy insecure SSL-disable examples from third-party installer snippets; TLS peer and host validation must remain enabled.
+## 14. Tenant registration and external dApp integration
+
+### 14.1 Roles and responsibilities
+
+| Role | Intended access |
+|---|---|
+| Platform administrator | Create/suspend tenants, inspect platform health, handle exceptional support actions |
+| Tenant owner | Manage their organization's people, policies and applications |
+| Tenant administrator | Manage permitted app settings without acquiring owner-only membership authority |
+| Tenant viewer | Read permitted organization data only; no registration or policy mutation |
+| dApp end user | Approve their own connection or transactions, not administer tenants |
+
+Role enforcement must be server-side; hiding a button is not an access-control system. A platform administrator's membership in the default migrated tenant is separate from ownership of every customer wallet.
+
+### 14.2 Correct example of a registered dApp
+
+Suppose the wallet is at `https://wallet.example.org` and a merchant wants `demo3` on another hostname:
+
+| Registration field | Correct example |
+|---|---|
+| Application name | `demo3` |
+| Exact HTTPS origin | `https://demo3.example.org` |
+| Exact callback URL | `https://demo3.example.org/callback.html` |
+| Scope | `address.read` only for first connection test |
+| Transaction request permission | Disabled initially; enable separately for tested spend flows |
+
+The callback page must be served by the registered dApp itself. Register via the authenticated `tenants.php` form, **not** by navigating to the POST-only action URL in a browser.
+
+### 14.3 Why a path is not an origin
+
+These are **the same origin**:
+
+```text
+https://wallet.example.org/
+https://wallet.example.org/demo/
+https://wallet.example.org/demo/callback.html
+```
+
+These are **different origins**:
+
+```text
+https://wallet.example.org/
+https://demo3.example.org/
+```
+
+Even different origins may share an underlying hosting folder when incorrectly mapped. Give the wallet and dApp distinct document roots and check in the hosting panel. Strict browser-origin separation is necessary but not sufficient for host security.
+
+### 14.4 v0.9 Phase B R2 friendly validation
+
+| Server or browser condition | Correct user guidance |
+|---|---|
+| Origin URL has a path (`/demo`) | "Enter the HTTPS origin only: https://hostname" |
+| Callback lacks `https://`/host | "Enter a complete HTTPS callback URL" |
+| Callback host differs from registered origin | "Callback must be on the dApp's exact registered origin" |
+| dApp tries to use wallet origin | "Host the dApp on a separate HTTPS origin and document root" |
+| `ORIGIN_ALREADY_ASSIGNED` (HTTP 409) | "This site origin is already registered to another organization" |
+| `INVALID_DAPP_REGISTRATION` (HTTP 422) | "Correct application name, origin and callback" with field-specific error |
+| `POST_REQUIRED` | "Submit the registration form; direct GET browsing cannot create apps" |
+| App exists but is disabled | "Ask this tenant's authorized owner to review its status" |
+
+The backend must continue returning an appropriate machine-readable code while the frontend shows humane text. Avoid disclosing which other organization owns an origin to unauthorized users.
+
+### 14.5 Existing records and duplicate requests
+
+Registration can succeed while an unrelated frontend reset/refresh fails. Before retrying after a UI error, reload the tenant list and check whether the application already exists. Avoid duplicate app/client registrations and distinguish "saved, refresh failed" from "API rejected". The R2 hotfix preserves the earlier null-form reset correction.
+
+## 15. Authorization, SDK and mobile-browser workflows
+
+### 15.1 SDK concepts
+
+The existing Coxy Connect SDK was introduced for independent website-to-wallet communication. It accepts the wallet origin, registered public client identifier, full redirect callback and requested test network. The SDK facilitates a browser redirect/approval flow; it must not be treated as a shared secret or as proof that a payment cleared.
+
+**Conceptual usage based on the reviewed Coxy Connect developer guide:**
+
+```js
+// The merchant hosts the approved, version-matched Coxy Connect module
+// under its OWN origin. Import path may differ by the SDK package.
+import { CoxyConnect } from '/assets/coxy-connect.mjs';
+
+const wallet = new CoxyConnect({
+  walletOrigin: 'https://wallet.example.org',
+  clientId: 'REGISTERED_PUBLIC_CLIENT_ID',
+  redirectUri: 'https://shop.example.org/wallet-callback.html',
+  network: 'preprod'
+});
+
+// Trigger only from an explicit user action.
+await wallet.connect();  // address.read flow
+
+// On the exact registered callback page, using the same config:
+// const account = await wallet.resume();
+```
+
+Confirm the exact API/export path with the SDK version installed on the site; this is a tutorial example, not a claim that the above placeholder client identifier is functional. The browser's public client ID may appear in source. Private merchant signing credentials, session tokens and wallet keys must not.
+
+### 15.2 OAuth and PKCE verification
+
+The authorization server must enforce exact redirect URI matching, a one-time authorization code, S256 PKCE, request-bound `state`/CSRF protections, short token lifetimes, restrictive scopes and immediate revocation upon app disable or tenant suspension. The callback cannot be an arbitrary URL. Validate the tenant and dApp at **both** authorization and token exchange, and for subsequent API use.
+
+OAuth security details are documented in RFC 9700: https://www.rfc-editor.org/rfc/rfc9700.html
+
+### 15.3 Permission semantics
+
+- `address.read`: Public receiving/account address access as approved by the wallet user. Should not expose unrelated accounts or shielded state.
+- `tx.request`: Application may ask for a transaction review. The wallet user still approves the exact chain, asset, recipient, amount, fees and details.
+- Tenant permission and user consent are separate. One cannot replace the other.
+- A consent record is bound to the registered origin/client, account, network, scopes and revocation state.
+
+### 15.4 Mobile browser, popup and return-to-dApp
+
+Mobile browsers often block unsolicited popups, have restricted background execution and do not offer the same extensions as desktop browsers. The best broadly compatible architecture is a **user-initiated top-level redirect to the dedicated wallet origin**, with a registered callback to the merchant site. Retain the order/authorization correlation on the merchant backend, not in an untrusted query parameter. Avoid depending on third-party cookies for this flow.
+
+A robust mobile session should handle:
+
+1. User clicks **Connect** or **Pay with Coxy Wallet** on the merchant.
+2. Merchant creates a one-time intent and redirects to the dedicated wallet.
+3. Wallet authenticates the user and presents a clear approval screen.
+4. If signing is supported for that network, the browser vault/devices enforce their unlock and approval rules.
+5. Wallet returns through the exact callback with an authorization result or transaction reference.
+6. Merchant independently queries its backend/payment status; the callback does not prove settlement.
+7. Interruptions, back button, expired sessions and reloads produce a safe recoverable state.
+
+### 15.5 The Midnight exception
+
+The v0.7.x Midnight panel supports network health and a **read-only browser connector** to a Midnight-compatible injected wallet such as Lace. It does not provide independent extension-free shielded-wallet management in ordinary phone browsers. Display `unavailable` when a wallet does not expose a private/shielded balance method; do not invent `0` for inaccessible private data. Full Midnight private wallet support is a distinct audited integration milestone.
+
+## 16. Customer payment lifecycle and reconciliation
+
+### 16.1 Payment intent creation
+
+The merchant backend creates a unique order reference and an immutable payment intent containing, at minimum:
+
+- Tenant, registered dApp, environment and network identity.
+- Order ID, payment intent ID, currency/asset identification and exact integer quantity in native units.
+- Recipient address or script policy, expiry and merchant authorization state.
+- Amount and fee presentation policy, checksum/fingerprint and idempotency identifier.
+- Allowed confirmation/finality criteria and the response/error state.
+
+Never use floating-point JavaScript arithmetic as the canonical representation for satoshis, lamports, drops, wei or lovelace. Use checked arbitrary precision integers/decimal strings.
+
+### 16.2 Transaction approval
+
+For a network with tested signing capabilities, prepare the transaction using exact chain identity. Display the contract interaction or value transfer, recipient, asset amount, gas/network fee cap, and the implications of failure. Check the estimate against current network rules; the Sepolia R3 experience demonstrated why hardcoded 21,000-gas assumptions can fail. Require a fresh user approval for any meaningful change to transaction details.
+
+No web administrator or tenant owner may automatically sign on behalf of a customer's device simply because a payment intent exists.
+
+### 16.3 A state machine that preserves traceability
+
+```mermaid
+stateDiagram-v2
+    [*] --> prepared
+    prepared --> expired: timeout or cancel
+    prepared --> approved: user consents
+    approved --> submitting: signed broadcast attempted
+    submitting --> submitted: hash observed
+    submitting --> uncertain: provider times out
+    submitted --> confirmed: validated chain receipt + policy depth
+    submitted --> failed: definitive failure/revert
+    uncertain --> submitted: later discovered by hash
+    uncertain --> failed: definitive evidence of rejection
+    confirmed --> [*]
+    failed --> [*]
+    expired --> [*]
+```
+
+Real implementations may use additional states, but the invariants are essential: do not silently reinterpret `uncertain` as `failed` and rebroadcast; keep a reliable payment/event history and an explicit reconciliation action. A transaction with a reverted receipt consumes fees even when the intended value was not transferred.
+
+### 16.4 Acceptance criteria for a payment
+
+The back end must compare the observed transaction against the signed intent: chain/network, recipient, currency, amount, transaction hash, execution status, confirmation depth and double-payment prevention. Never rely only on a wallet UI banner or a third-party redirect. For UTxO systems, consider outputs and transaction metadata, not only a one-address balance delta. Maintain a documented policy for chain reorganizations and rare provider disagreements.
+
+### 16.5 Merchant integration with existing web frameworks
+
+**WordPress/WooCommerce:** A plugin or payment gateway module should create intents server-side, redirect customers into the wallet, receive the callback and reconcile through a background job. WooCommerce order state should change only after verified settlement. Do not store customer keys in WordPress options.
+
+**Laravel:** Use an authenticated server service class, queue workers for confirmation polling, strongly scoped merchant keys, idempotent DB transactions and signed/replay-safe webhooks. Do not let a browser set a Laravel order to paid directly.
+
+**Plain PHP/cPanel LMS:** Use `coxy-connect.mjs` for user consent and a local PHP module for merchant payment intent/state. Store course enrollment/payment linkage under a unique order ID and record callbacks separately from reconciled payments.
+
+**Non-PHP frameworks (Django, Rails, Node, .NET):** The website may use the SDK/browser redirection and a documented HTTP integration, subject to tested protocol/authentication support. The wallet server itself remains PHP/MySQL in the currently reviewed architecture.
+
+### 16.6 Refunds and noncustodial limitations
+
+A refund is generally a new authorized blockchain payment; it is not an SQL status change. The merchant needs its own custody/account policy, customer destination verification and traceable refund workflow. Chain fees and reversibility depend on the network and token. Do not promise card-style chargebacks for irreversible blockchain transfers.
+
+## 17. Blockchain adapter reference
+
+Each network must have its own adapter identity, address validation, native units, RPC allowlist and capability flags. The following describes the reviewed **v0.7.x+** integrated architecture, not a declaration that every chain has a working signer.
+
+| Chain/environment | Core module status | Native unit | Current limitation or identity check |
+|---|---|---|---|
+| Cardano Preprod | Existing wallet/signing path; v0.8 assets/review extras | lovelace | v0.8 mint draft unsigned; contract simulation not complete |
+| Ethereum Sepolia | R3 native test ETH send succeeded previously | wei | Gas estimate + fee policy + receipt validation |
+| Base Sepolia | Existing EVM adapter path | wei | Re-test chain ID, fees and provider independently |
+| Bitcoin Testnet4 | Read-only adapter in v0.7.x | satoshi | Signed Bitcoin transactions not added by read-only layer |
+| Dogecoin Testnet | Read-only adapter; provider availability varied | koinu | Provider timeout/reliability checks |
+| Solana Devnet | Read-only v0.7 adapter | lamport | RPC domain/path security; do not assume sending exists here |
+| XRP Ledger Testnet | Read-only adapter | drop | Unfunded account is not activated; no signing in v0.7 |
+| BNB Smart Chain Testnet | Read-only v0.7 adapter | wei | Chain ID 97 / `0x61`; Alchemy testnet path allowlist |
+| Ethereum Classic Mordor | Read-only v0.7 adapter | wei | Chain ID 63 / `0x3f`; provider may reject unsupported methods |
+| TRON Nile | Read-only adapter | sun | Not Shasta; new account can be unactivated |
+| Midnight Preview/Preprod | Indexer health + user-approved read-only Lace connector | network/wallet-dependent | Shielded access depends on compatible wallet API; not general extension-free signing |
+
+Other earlier Coxy Multichain v4.x experiments may have broader signing implementations, such as TRON Shasta and ETC. **Those are a separate code line**. Their feature claims do not automatically carry into the current Coxy Wallet Engine v0.7.x overlay. Avoid copying Shasta RPC configuration into Nile or an ETC Mainnet provider into Mordor.
+
+### 17.1 RPC provider failure handling
+
+Return a specific, sanitized error for: URL policy rejection, wrong testnet identity, HTTP 401/403, HTTP 404, HTTP 429, HTTP 5xx, DNS failure, TLS failure, timeout, malformed JSON and invalid balance format. Only allow operators to configure provider URLs in the protected backend. Never let an end-user input a server-side arbitrary RPC URL, never disable TLS checks and never reveal API keys in browser diagnostics.
+
+### 17.2 Adapter checklist for a new chain
+
+- Network ID/genesis or chain ID, native unit and display precision.
+- Public address validation with canonical encoding/checksum.
+- Provider host/path allowlist, DNS/IP safety and rate limits.
+- Bounded HTTP timeout and response size; strict schema parsing.
+- Health probe that does not require an address, plus known-address read.
+- Offline parsers with negative, overflow, empty/unfunded and wrong-network tests.
+- Explicit signing capability flags, initially `disabled`.
+- Explorer links, transaction status handling and provider disagreement logic.
+- Administrator diagnostics, audit and a per-chain emergency kill switch.
+
+## 18. Administrator diagnostics and health checks
+
+| Endpoint/file | What a PASS establishes | What it does NOT establish |
+|---|---|---|
+| `diagnostic-v070.php` | Synthetic adapter correctness and optional live provider reads | User-owned funded balance or transaction success without separate testing |
+| `diagnostic-upgrade.php` | PHP extension, private-path, installer-lock, v0.8/v0.9/v1.0 prerequisites | Production audit or complete installer integration |
+| `diagnostic-tenant-v090.php` | Schema, origin mapping, default owner integrity | Unbypassable runtime ACLs |
+| `diagnostic-phase-b-v090.php` | Tenant gate hooks present, staging flag state | Correct cross-tenant authorization under real load |
+| `Coxy_Wallet_install_path_preflight.php` | CLI-only installation path/lock/bootstrap checks | A web page; opening directly intentionally returns HTTP 404 |
+| `api.php?action=addon_health` (where available) | Authenticated application health/version hints | Guarantees about key security or Mainnet readiness |
+
+### 18.1 Normal Phase B diagnostic progression
+
+```text
+SCHEMA_AND_MAPPING_READY
+          |
+READY_TO_ACTIVATE_ON_STAGING
+          |
+ENABLED_LIVE_VERIFICATION_REQUIRED
+          |
+     Manual two-tenant and payment security tests
+          |
+     Independent security review and release acceptance
+```
+
+A static `PRESENT` status means the code hook is present; it is *not* an end-to-end access control test. Do not convert `ENABLED_LIVE_VERIFICATION_REQUIRED` to green merely by changing a display constant.
+
+### 18.2 Safer browser diagnostics for users without SSH
+
+For the future v1.0 installer, provide a strictly authenticated browser-accessible administrator dashboard with only sanitized status codes: `private_path_ok`, `install_locked`, `schema_version`, `network_reachable`, `origin_mode`, `mainnet_disabled`, and `migration_ready`. Never provide stack traces, connection strings, directory listings, wallet account data or token values to users. Keep full privileged maintenance tests CLI-only and separate.
+
+### 18.3 HTTP 404 on CLI preflight is intentional
+
+The path checker contains a guard similar to:
+
+```php
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
+```
+
+Place it in a private local/server directory and run it through `php` on the command line. Do not upload CLI maintenance scripts into a public site because you expect a browser UI.
+## 19. End-user and security testing matrix
+
+### 19.1 Before testing
+
+Use an isolated testnet staging site, two disposable tenants, two distinct HTTPS dApp origins, separate verified test accounts, a supported mobile browser and small testnet balances controlled by the tester. Record the wallet/module versions, selected network, browser/device, test time and pass/fail observations. Never collect users' passwords, PINs, recovery phrases or private keys as test evidence.
+
+### 19.2 Administrator tests (actual page-level steps)
+
+1. Sign in as platform administrator to the dedicated wallet hostname.
+2. Open `diagnostic-upgrade.php` and confirm host prerequisites, protected private path, existing lock and Mainnet emergency stop.
+3. Open `diagnostic-tenant-v090.php`; expect `SCHEMA_AND_MAPPING_READY` without any origin ownership conflicts.
+4. Open `diagnostic-phase-b-v090.php`; on staging only, expect `ENABLED_LIVE_VERIFICATION_REQUIRED` once activated.
+5. Open `tenants.php`; create two disposable organizations with different slugs and owners.
+6. Register **different** HTTPS dApp origins for each, first with `address.read` only.
+7. Test the owner, admin and viewer controls using distinct logins. Viewers must not be able to create apps or suspend others.
+8. Attempt to register the same origin under the other tenant. Expect HTTP 409 with friendly guidance and no new record.
+9. Attempt a dApp origin containing a path such as `https://wallet.example.org/demo`; expect immediate rejection.
+10. Disable one app and then suspend one tenant. New tokens, sign requests and checkout preparation for the suspended tenant must be denied while the other tenant works.
+11. Resume the tenant. Ensure its individual apps are **not automatically reactivated** and revoked tokens stay invalid.
+12. Verify that historical payment status can still be audited by authorized operators.
+
+### 19.3 Customer connection and authorization tests
+
+1. Open a registered test merchant on desktop and click **Connect Wallet**.
+2. Verify the browser is redirected to the expected wallet hostname (not an unexpected lookalike).
+3. Check that the wallet shows the exact app name, origin, requested scope and network.
+4. Reject connection; confirm no credential/account data is returned.
+5. Repeat and approve only `address.read`; confirm the exact callback page resumes a valid session.
+6. Try a wrong callback/redirect, missing `state`, invalid/reused PKCE verifier or disabled client: reject.
+7. Revoke the app in the wallet and confirm the previously issued bearer token no longer works.
+8. Request `tx.request` from a read-only client and confirm it is denied before any signing UI.
+9. Attempt to change `tenant_id` or `client_id` in a user-controlled request. Confirm server access is based on authenticated ownership, not the changed identifier.
+
+### 19.4 Native chain balance tests
+
+For each enabled chain, select the exact network, enter a public testnet address and compare the returned balance with an independent explorer/provider. Check an empty/unfunded address, a funded address, a malformed address, a wrong-network address and a temporarily unavailable RPC.
+
+| Network | End-user observation to verify |
+|---|---|
+| BTC Testnet4 | Correct testnet identity; satoshi count and unconfirmed movement distinguished |
+| Dogecoin Testnet | Provider health is meaningful; koinu count and timeouts handled clearly |
+| Solana Devnet | Lamports and SOL display match Devnet account; RPC authorization errors are specific |
+| XRP Testnet | Drops and XRP display; unactivated account is stated, not disguised as RPC failure |
+| BNB Testnet | RPC returns chain ID 97 and accurate wei/BNB balance |
+| ETC Mordor | RPC returns chain ID 63 and accurate native balance; wrong-chain replies rejected |
+| TRON Nile | Correct sun/TRX amount; unactivated Nile account distinguished from bad provider |
+| Midnight | Health-only indexer checks; optional Lace consent/read works only with compatible injected wallet |
+| Ethereum Sepolia | Existing confirmed R3 history remains visible; a new send is optional and separately approved |
+| Cardano Preprod | Linked address and v0.8 assets match a trusted Preprod explorer; no unintended mint/sign |
+
+A zero balance is a valid result for an unfunded address. It does not prove the funded-address parsing path is correct; at least one controlled funded account should be tested per supported balance reader before operational sign-off.
+
+### 19.5 Wallet send/sign test (testnet only, supported chains)
+
+1. Use a fresh small **testnet** amount; confirm the receiving address belongs to the test team.
+2. Confirm chain, recipient, asset, nonce/UTxO details, estimated network fee and total before approval.
+3. Cancel and verify no transaction is sent.
+4. Repeat, approve using the wallet's supported authentication factor; verify a single broadcast attempt.
+5. Review hash, status and confirmation depth in the wallet and a matching testnet explorer.
+6. Test intentional low balance, provider timeout and duplicate submit. Do **not** blindly repeat transactions reported as `uncertain`.
+7. Verify a returned failure never shows a successful value payment; maintain status and gas-fee history.
+8. Attempt Mainnet selection or prohibited token/contract operation; the emergency stop must block it.
+
+### 19.6 Customer checkout and merchant tests
+
+| Case | Required outcome |
+|---|---|
+| New order creates one intent | One stable, uniquely identifiable prepared order |
+| Exact retry with same order details | Idempotent result; no duplicated payable request |
+| Same order ID with changed amount/recipient | Conflict/rejection |
+| Suspended tenant submits checkout | Denied |
+| Disabled merchant submits checkout | Denied |
+| Customer cancels signing | No payment success |
+| Browser callback says success but RPC cannot confirm | Remains pending/uncertain |
+| Confirmed blockchain payment | Exact amount/recipient/network and policy depth verified |
+| Chain revert or rejected transfer | Failure with fee implications retained |
+| Reorg/provider disagreement | Pending/reconciliation state retained until policy satisfied |
+| Already submitted tx with RPC timeout | Search by known hash/order before trying any retry |
+
+### 19.7 Android and iPhone tests
+
+Test at least Android Chrome and iOS Safari using normal phone-browser settings, not only desktop responsive emulation.
+
+- Install no extensions for the core extension-free path; confirm the browser wallet vault can load, lock, unlock and recover using its supported factors.
+- Test fresh private browsing and a new device. Browser storage may be cleared or partitioned; a user's on-chain wallet must still have a secure recovery path.
+- Test multiple tabs, backgrounding, interrupted redirects, cookies, lost connectivity, screen lock, reload and returning from another app.
+- Check exact content in the transaction review at narrow viewport sizes; the primary confirm/cancel controls must remain visible and unambiguous.
+- Test with slow network and low device battery, plus a wallet session expiry during checkout.
+- If using passkeys/WebAuthn PRF, verify actual device support, user verification and recovery fallbacks; API availability alone is insufficient evidence of hardware-backed protection.
+- Confirm Midnight Lace/extension-dependent operations are accurately shown as unavailable on unsupported ordinary phone browsers.
+
+### 19.8 Negative security tests and pass/fail criteria
+
+1. Same-origin wallet dApp registration: rejected.
+2. Cross-tenant origin claim: rejected.
+3. Cross-tenant access by altered object IDs: rejected in every API route.
+4. Unauthorized POST or invalid CSRF token: rejected.
+5. Expired/reused OAuth authorization code: rejected.
+6. Disabled tenant/app bearer token: rejected.
+7. Unsigned/forged merchant request or changed immutable payment fields: rejected.
+8. Browser requests arbitrary RPC URL, mainnet host or SSRF target: rejected.
+9. Wrong chain ID returned by an upstream provider: rejected.
+10. Outdated R3 gas estimate for a new Sepolia address: blocked, never silently sent at unsafe limit.
+11. Access to `settings.php`, SQL setup data, recovery helpers and setup payload over HTTP: refused.
+12. Mainnet spending without completed release gates: refused.
+
+Record only the status code, reproducible steps, sanitized request shape, correlation ID and expected/actual outcome. Never upload bearer tokens or session cookie contents.
+
+## 20. Security architecture and threat controls
+
+### 20.1 Security is a system, not a PIN field
+
+A secure wallet requires origin isolation, authenticated sessions, cryptographic key separation, transaction intent integrity, user approval, malicious RPC handling, tenant object authorization, incident response and recovery. PIN length alone cannot compensate for compromised wallet-origin JavaScript or stolen browser storage.
+
+### 20.2 Threats and required controls
+
+| Threat | Required treatment |
+|---|---|
+| Malicious merchant JavaScript | Different wallet origin, restricted SDK scopes and exact redirects |
+| Wallet-origin XSS/supply-chain compromise | Strict CSP, dependency pinning, output encoding, code review, integrity and no untrusted scripts on signing pages |
+| Tenant IDOR/BOLA | Server-side per-object ownership check even when `tenant_id` is supplied in request |
+| CSRF and cross-origin confusion | CSRF protections, exact origin/callback, PKCE S256, state and session binding |
+| Session theft/replay | Secure, HttpOnly, SameSite cookies where appropriate; token expiry/rotation, revocation and device/session limits |
+| Weak PIN/browser storage | Strong key derivation, device factors where supported, rate limiting, secure recovery and tested fallback; no unsupported "hardware-backed" claim |
+| Key exfiltration | Customer signing keys stay in device-side protected wallet context or externally audited wallet; no admin APIs for exporting them |
+| Malicious RPC provider | Chain/genesis identity verification, bounded responses, independent confirmation checks and fixed operator allowlists |
+| Server-side request forgery | No user-controlled upstream URL, DNS/IP safety checks, TLS validation and redirect policy |
+| Intent manipulation | Canonical amount, recipient, chain, nonce, expiry and fee bound to user review and merchant record |
+| Duplicate spending | Idempotent requests, state machine, nonce/UTxO control and reconciliation before resubmission |
+| Installed-code tampering | Signed release manifest, canonical hash comparison, permission control and independent update-verification key |
+| Installer takeover | Ownership proof, one-time lock, setup cleanup and no public reinstall route |
+| Tenant suspension races | Transactional policy checks, revalidation at issuance/use, immediate revocation of pending authorizations |
+| Mainnet policy bypass | Global stop and per-chain gates enforced server-side and client-side; fail closed on unknown route |
+
+### 20.3 Separation of secrets and operator data
+
+- **User signing keys/recovery material:** Never printed in diagnostics, sent to the merchant server or administered by the platform tenant screen.
+- **Server configuration:** Lives outside public roots. It may hold operator-controlled API/provider identifiers and service credentials; it must not be copied into public release bundles.
+- **Public metadata:** Client IDs, public receiving addresses and non-secret chain identifiers can be shown where appropriate.
+- **Payment and tenant data:** Enforce least privilege and purpose-limited retention; sensitive personal information should not appear in generic diagnostics.
+- **Updater signing key:** Kept offline or in controlled build infrastructure; deployed instances only need pinned, independently trusted verification material.
+
+### 20.4 Browser security headers and CSP
+
+Use HTTPS/HSTS, sensible Referrer-Policy, `nosniff`, modern frame controls, cookies marked Secure and HttpOnly where applicable, and a strict Content Security Policy that permits only reviewed wallet assets. Do not blindly copy a CSP snippet if it breaks module loading; test actual `script-src`, `connect-src`, `form-action` and browser redirect behavior under strict settings. Avoid inline third-party widgets on pages where wallet credentials or transaction approval occur.
+
+### 20.5 Wallet recovery and migrations
+
+A browser IndexedDB vault is tied to that browser context and origin; a move from `example.org/coxy-wallet` to `wallet.example.org` changes the origin. Do **not** assume browser vault ciphertext can simply be copied across origins and unlocked. A migration needs a reviewed user-controlled recovery path and explicit verification of recovered public addresses. Never turn a recovery screen into a server-side mnemonic collection endpoint.
+
+Passkeys and device-bound keys require platform-specific usability testing. WebAuthn PRF or nonexportable browser keys are not automatically equivalent to independently verified secure-element custody. Keep meaningful recovery and strong unlock alternatives while identifying their tradeoffs.
+
+### 20.6 Auditing before Mainnet
+
+At minimum, commission reviews of the browser vault crypto design, wallet/dApp origin boundary, OAuth/PKCE implementation, transaction signing, chain-specific replay protections, smart-contract/CBOR parsers, merchant reconciliation, update system, installer and tenant isolation. The review must be tied to the exact released build hash and threats being audited. A passed unit suite alone does not satisfy this requirement.
+
+Useful benchmarks: OWASP ASVS 5.0, OWASP API Security Top 10, IETF RFC 9700 and the relevant blockchain wallet/contract standards.
+
+## 21. Logging, incident handling, backup and recovery
+
+### 21.1 A structured audit event
+
+Store an authorized, minimally identifying record for sensitive operations:
+
+```json
+{
+  "event_type": "merchant.intent.state_changed",
+  "event_time_utc": "2026-10-19T10:00:00Z",
+  "correlation_id": "example-correlation-id",
+  "tenant_ref": "opaque-tenant-reference",
+  "app_ref": "opaque-app-reference",
+  "network": "testnet-identifier",
+  "old_state": "submitted",
+  "new_state": "confirmed",
+  "reason_code": "CHAIN_RECEIPT_VALIDATED",
+  "actor_role": "system-reconciler"
+}
+```
+
+This is an **illustrative structure**, not an asserted existing JSON schema. Do not log passwords, access tokens, signed bearer headers, PINs, private wallet keys, recovery phrases, full private addresses or provider credentials. Access logs and audit logs require independent access controls and explicit retention/erasure policies.
+
+### 21.2 Incident playbooks
+
+**Provider outage:** Distinguish timeout, 429, 403, 404 and invalid response; keep last verified state; do not silently switch to an unverified Mainnet or wrong-testnet provider.
+
+**Transaction uncertain:** Capture known hash and intent fingerprint. Reconcile via trusted same-network providers. Do not blindly resend. Preserve submitted-at time, nonce/UTxO reference and explorer evidence.
+
+**Tenant compromise:** Suspend tenant and affected apps, revoke permissions/tokens, block new checkout/signing, preserve authorized audit evidence and notify relevant operators. Continue read-only investigation of already-broadcast funds.
+
+**Wallet-origin compromise:** Stop new signing, isolate compromised deployment, retain snapshots/logs, investigate released asset integrity and affected credentials, rotate operator-side infrastructure credentials where appropriate, and guide users through a controlled recovery procedure. Never ask them to send recovery words to support.
+
+**Bad upgrade:** Disable new writes/signing where practical, restore a coherent source/database snapshot, preserve transaction reconciliation, compare checksums, and test remediation before reactivating.
+
+### 21.3 Backups are not the same as user wallet recovery
+
+Maintain separate protected backups of: application source, release manifest, configuration templates, operator-controlled private configuration, SQL database and allowed audit logs. A website backup is not guaranteed to restore browser-side self-custody material. User-owned recovery material must have its own secure, private recovery lifecycle.
+
+Suggested operational cadence (adjust by risk and retention law): encrypted daily relational backups, off-host copies, weekly restore drills on sanitized test data, release-time snapshots, and periodic incident-response exercises. Encrypt backups and restrict access; do not store them under webroot or in public source repositories.
+
+### 21.4 Observability on cheap/shared hosting
+
+Where persistent workers are unavailable, use bounded cron-triggered reconciliation and a small queue table rather than unbounded requests within page loads. Limit outbound requests per transaction, cache non-sensitive network metadata, apply exponential backoff for rate limits and publish aggregate error rates without exposing customer details. PHP-FPM/opcache, indexed database queries and HTTP timeout limits help reliability, but cannot compensate for an unreliable external RPC.
+
+## 22. How to add a new blockchain or framework adapter
+
+### 22.1 Chain adapter interface (recommended development contract)
+
+```text
+adapter.id
+adapter.networks
+adapter.capabilities            (e.g. balance.read, tx.request)
+adapter.validatePublicAddress()
+adapter.getNetworkIdentity()
+adapter.getBalance()
+adapter.getTransactionStatus()
+adapter.getExplorerLink()
+adapter.buildUnsignedRequest()   (only when reviewed)
+adapter.signOnUserDevice()       (separately audited)
+adapter.broadcastSignedTx()     (separately audited)
+```
+
+This is a **proposed interface contract**, not a claim that existing PHP/JS classes use these exact method names. Keep chain adapters isolated behind the same parent authentication and authorization rules.
+
+### 22.2 Step-by-step network addition
+
+1. Identify exact network, address format, native units, supported assets, faucet and explorer.
+2. Create read-only metadata and an allowlisted provider health probe.
+3. Add PHP request schema validation, timeout, rate limits and network identity checks.
+4. Add browser adapter/read-only page with canonical amount formatting.
+5. Add negative tests: bad address, wrong network, empty account, huge integer, RPC 404/429/500, malformed JSON, DNS/TLS timeout and provider wrong-chain response.
+6. Add operator-only feature flag and diagnostics; keep signing disabled.
+7. Prove a public funded balance independently on a matching testnet explorer.
+8. Design signing only after network-specific transaction review, fee logic, key custody, replay protection and audit tests pass.
+9. Keep Mainnet separately disabled until independent review.
+
+### 22.3 Adapting an existing website or application framework
+
+A platform-specific plugin/adapter should implement four layers:
+
+- **Site configuration:** Exact HTTPS origin and public client ID, but no wallet secrets in the browser.
+- **User bridge:** User-initiated Connect/Pay button and exact callback/PKCE handling.
+- **Server payment bridge:** Idempotent intent creation, business-specific order mapping and verified settlement polling.
+- **Administration/audit:** Merchant configuration, reconciliation status, refunds, error handling and tenant-scoped roles.
+
+Possible deliverables: WordPress/WooCommerce gateway; Laravel package; plain PHP include/SDK; Magento/PrestaShop integration; Django/Rails/Node frontend SDK with a tested backend HTTP payment client. Each is an independent compatibility and security test matrix; avoid advertising official support before completion.
+
+### 22.4 Multi-tenant API correctness
+
+All SQL data access should check the application's authenticated tenant identity and the object's actual ownership. Do not rely on predictable integer IDs or browser-supplied `tenant_id`. Test requests where Tenant A uses Tenant B's valid client ID, origin, payment ID, order ID and wallet link. Require denial even if the SQL row exists.
+
+
+## 23. Frequent installation and integration failures
+
+| Symptom / status | Meaning | Safe next action |
+|---|---|---|
+| "Coxy Wallet is not installed" | Loader cannot locate expected private bootstrap or installer lock | Check real document root and private sibling files; do **not** reinstall |
+| "Wallet public path does not match private installation settings" | `wallet_base_path` points to a filesystem directory or wrong URL | For dedicated root use `''`; for folder mode use public path `/coxy-wallet` |
+| CLI preflight returns browser HTTP 404 | Intentionally CLI-only | Move file outside public_html and run with `php` in CLI |
+| `assets/tenant-v090.mjs` returns HTTP 404 | Module not deployed at public URL | Map ZIP folder-style path to actual dedicated-root asset directory |
+| `Loading tenant permissions...` forever | Frontend module missing, MIME/CSP problem or API initialization error | Check Network status + MIME + Console; do not change database |
+| `Cannot read properties of null (reading 'reset')` | Previous frontend awaited event handler then read `currentTarget` | Use Phase B reset/R2 hotfix; check whether tenant was already saved |
+| `INVALID_DAPP_REGISTRATION` HTTP 422 | Bad name, origin or callback | Use full origin-only HTTPS URL and full same-origin callback |
+| `ORIGIN_ALREADY_ASSIGNED` HTTP 409 | Origin claimed by another tenant | Use a new independent dApp origin; do not delete claim blindly |
+| `POST_REQUIRED` opening API in browser | Route requires authenticated POST | Submit through authorized UI, not URL bar |
+| `DAPP_WALLET_ORIGIN_FORBIDDEN` | dApp origin equals wallet hostname | Use separate dApp HTTPS origin and document root |
+| BNB JSON-RPC URL shows 404 on browser GET | JSON-RPC endpoint is not a web page; or invalid path | Use a bounded POST health method, exact network chain ID 97 |
+| ETC invalid balance/identity | Mordor RPC method unsupported, malformed reply or wrong chain | Check address-free RPC health, require chain ID 63 |
+| TRON Nile 0 account not activated | Address exists in valid format but no funded account state | Activate using testnet faucet only if user owns account |
+| Midnight missing Lace | No compatible injected wallet/permission | Network health-only mode; don't simulate private balance |
+| Provider HTTP 403/429/timeout | Upstream block/quota/connectivity | Diagnose outbound host/provider; never disable TLS or url checks |
+| Sepolia full gas limit/reverted | Earlier fixed gas limits, provider/state or transaction failure | Dynamic estimate, exact review, receipt forensics; no blind resend |
+| v0.8 flag `INTENTIONALLY_DISABLED` | Optional feature off by design | Test prerequisites, then activate selectively on staging |
+| `READY_TO_ACTIVATE_ON_STAGING` | Phase B hooks installed, not active | Back up and enable only in isolated staging |
+| `ENABLED_LIVE_VERIFICATION_REQUIRED` | Phase B flag on, real checks pending | Run two-tenant + checkout acceptance suite |
+| `AUDIT_NOT_SUPPLIED` | Independent audit evidence absent | Keep Mainnet disabled; commission reviewed release-specific audit |
+| Signed updater `DISABLED` | Expected staging safety gate | Do not activate without verified signatures, rollback and path rules |
+
+**Response discipline:** An error that mentions one network or API does not authorize changing unrelated working signing modules. Use small targeted diffs, unit tests, reproducible diagnostic codes and rollback instructions.
+
+## 24. Product advantages, limitations and future roadmap
+
+### 24.1 Advantages if release gates are met
+
+1. **Self-hosted operator control:** Website owners choose the hosting account, database and allowed chain infrastructure, subject to secure deployment requirements.
+2. **Shared-hosting access:** Does not inherently require each merchant to deploy an always-on blockchain node or extension-specific wallet plugin.
+3. **Common SDK:** One wallet connection and permission vocabulary for multiple independent applications.
+4. **Multichain modularity:** Chain-specific parsing and providers can be reviewed independently.
+5. **Tenant governance:** Independent organizations, roles, origin claims, suspension and audit logs.
+6. **Merchant integration:** An order/intent/reconciliation framework avoids ad hoc address-only payment flows.
+7. **Browser-first experience:** Supported customer actions can work on ordinary HTTPS-capable phone browsers without a desktop extension.
+8. **Recoverability and operator diagnostics:** Installation, tenant and chain diagnostics make failures explainable rather than silently retrying financial operations.
+9. **Incremental adoption:** Websites may begin with public balances and read-only connections before enabling sensitive capabilities.
+
+### 24.2 Limitations that must be stated publicly
+
+- Self-hosting does **not** automatically make any operator or client code trustworthy.
+- A compromised wallet-origin JavaScript bundle can endanger browser-side signing safety.
+- RPC endpoints, block explorers and external nodes can fail or misreport; independent verification matters.
+- The current v0.7 additional adapters are often read-only, not complete sending wallets.
+- Midnight Lace is currently not a generally extension-free mobile workflow.
+- Mainnet, audited custody, universal token support, refunds and regulated payment operations remain gated.
+- Browser recovery and WebAuthn availability vary by phone, device lock policy and authenticator.
+- A Softaculous-compatible custom package still needs host-level installation and acceptance; it is not yet in the public installer catalog.
+
+### 24.3 Recommended next engineering milestones
+
+| Priority | Milestone | Concrete completion criterion |
+|---|---|---|
+| P0 | Finish Phase B live validation | Two-tenant OAuth, signing, checkout, suspension and revocation pass |
+| P0 | Canonical source consolidation | One reproducible source tree containing all tested v0.7/v0.8/v0.9 fixes |
+| P0 | Repair fresh-install schema | Clean install equals migrated schema, payment/permission columns included |
+| P0 | Dedicated wallet-origin enforcement | Setup refuses unsafe shared roots or marks test-only fallback |
+| P1 | Reliable customer payment SDK | Versioned public API, idempotent intents, confirmed settlement and webhooks |
+| P1 | Android/iOS completion | Session/resume/recovery/approval E2E tests on real phones |
+| P1 | cPanel installer v1.0 candidate | Fresh/upgrade/rollback across supported hosts and PHP versions |
+| P1 | Softaculous custom package | Host-admin installation, upgrade, backup/restore and uninstall tests |
+| P1 | Independent security review | Reproducible audited release manifest and remediated findings |
+| P2 | More reviewed chain send adapters | Per-chain testnet audit, then explicit gated activation |
+| P2 | Framework connectors | WooCommerce, Laravel, plain PHP, and other application packages |
+| P2 | Hosted distribution program | Hosting partnerships, operational support, compatibility certification |
+
+
+## 25. Release acceptance checklist
+
+Mark these against **evidence**, not confidence or a screenshot of static diagnostic output.
+
+### 25.1 Installation and recovery
+
+- [ ] Dedicated wallet origin and its private sibling path independently verified.
+- [ ] Fresh install on new empty database succeeds with complete migrations.
+- [ ] Existing v0.9 installation upgrades without replacing live settings, accounts or historical records.
+- [ ] PHP versions, extensions, MIME headers, TLS and outbound HTTPS validated on real host.
+- [ ] Setup payload inaccessible/removed, `install/` locked, no SQL or private code downloadable.
+- [ ] Signed package manifest and release hashes reviewed; backups and rollback exercised.
+
+### 25.2 Authorization and tenant security
+
+- [ ] Two independent tenants, origin claims, owners/admins/viewers tested.
+- [ ] Cross-tenant object ID substitution fails in every relevant route.
+- [ ] User consent, PKCE, state, exact callback and scope boundaries tested.
+- [ ] Revocation and suspension immediately block new sensitive calls.
+- [ ] Browser SDK never receives private merchant infrastructure secrets or customer signing material.
+
+### 25.3 Wallet, money and chains
+
+- [ ] Supported networks have exact identity/units and independently verified balance reads.
+- [ ] Supported signers have actual user review, rejection and receipt tests.
+- [ ] Merchant order identity is immutable and idempotent.
+- [ ] Confirmation/reorg/failed/uncertain payments are reconciled, never decided by redirects.
+- [ ] Mainnet emergency stop and per-chain feature flags pass negative tests.
+- [ ] Real Android/iPhone device flows tested, including lost session and recovery.
+
+### 25.4 Hosting distribution and external audit
+
+- [ ] Canonical production source is fully integrated (no older EVM core regression).
+- [ ] Softaculous metadata/install/archive/fileindex and upgrade callbacks reviewed.
+- [ ] Licensed-host fresh install, upgrade, backup/restore and safe uninstall completed.
+- [ ] Independent source/cryptography/API/security audit performed on exact release.
+- [ ] Findings resolved and security contact, incident plan and update policy published.
+
+If any P0 security item fails, the production/Mainnet release remains blocked.
+
+## 26. Official technical references
+
+### Hosting, deployment and installation
+
+- Softaculous, **Making Custom Package**: https://www.softaculous.com/docs/developers/making-custom-package/
+- Softaculous, **Adding Custom Scripts** (hosting admin): https://www.softaculous.com/docs/admin/adding-custom-scripts/
+- Softaculous, **Custom Script API**: https://www.softaculous.com/docs/api/api/
+- Softaculous, **End-user Install a Script**: https://www.softaculous.com/docs/enduser/install-a-script/
+- cPanel, **MultiPHP Manager**: https://docs.cpanel.net/cpanel/software/multiphp-manager-for-cpanel/
+- cPanel, **How to Locate and Install a PHP Version or Extension**: https://docs.cpanel.net/ea4/php/how-to-locate-and-install-a-php-version-or-extension/
+
+### Web security, OAuth and browser cryptography
+
+- IETF **RFC 9700**, OAuth 2.0 Security Best Current Practice: https://www.rfc-editor.org/rfc/rfc9700.html
+- OWASP **Application Security Verification Standard**: https://owasp.org/www-project-application-security-verification-standard/
+- OWASP **API Security Top 10**: https://owasp.org/API-Security/
+- OWASP **Broken Object Level Authorization**: https://api-security.owasp.org/editions/2023/en/0xa1-broken-object-level-authorization/
+- W3C **Web Authentication Level 3**: https://www.w3.org/TR/webauthn-3/
+- MDN **SubtleCrypto secure-context requirements**: https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto
+
+### Blockchain and wallet reference material
+
+- Cardano **Developer Portal / native tokens**: https://developers.cardano.org/
+- Ethereum **JSON-RPC API**: https://ethereum.org/en/developers/docs/apis/json-rpc/
+- Solana **JSON-RPC documentation**: https://solana.com/docs/rpc
+- XRPL **Developer documentation**: https://xrpl.org/
+- TRON **developer documentation**: https://developers.tron.network/
+- Midnight **documentation**: https://docs.midnight.network/
+- Midnight **DApp Connector API**: https://github.com/midnightntwrk/midnight-dapp-connector-api
+
+### Reviewed Coxy project source artifacts
+
+This manual was grounded in the uploaded/reviewed v0.6.1 R3, v0.7.x R3.4.2, v0.8.0 integration, v0.9.0 Phase A, v0.9.0 Phase B/R2 hotfix and v1.0.0 installer preview archives. Their original `README_FIRST.md`, `TEST_RESULTS.md`, installer files, SQL migrations and module trees are the authoritative source for **that particular release's** paths and supported API actions. Keep those release-specific documents with each deployment manifest.
+
+## Appendix A. Quick local developer cheat sheet
+
+```bash
+# 1. Check host PHP/JS requirements (no secrets).
+php -v
+php -m
+node --version
+
+# 2. Check a ZIP before extracting.
+unzip -t Coxy_Wallet_RELEASE.zip
+sha256sum Coxy_Wallet_RELEASE.zip
+
+# 3. Extract to an OFFLINE, NONPUBLIC review location.
+mkdir -p "$HOME/coxy-release-review"
+unzip -q Coxy_Wallet_RELEASE.zip -d "$HOME/coxy-release-review"
+
+# 4. Syntax check PHP (from extracted package root).
+cd "$HOME/coxy-release-review"
+find . -type f -name '*.php' -print0 | xargs -0 -n1 php -l
+
+# 5. Run only those test commands supplied with THAT release.
+# Example (Phase B archive): php tests/test_phase_b.php
+
+# 6. Perform live checks on HTTPS staging, not the PHP built-in server.
+```
+
+## Appendix B. Installation mode quick reference
+
+| Mode | Public web path | Private server directory | `wallet_base_path` |
+|---|---|---|---|
+| Dedicated origin | `wallet.example.org/public_html/` filesystem root | Sibling `coxy-wallet-private-isolated/` | `''` |
+| Website folder | `example.org/public_html/coxy-wallet/` | Outside webroot `coxy-wallet-private/` | `'/coxy-wallet'` |
+
+`wallet_origin` is the HTTPS scheme and hostname, never the filesystem path. A dedicated browser wallet origin is strongly preferred for sensitive signing.
+
+## Appendix C. Glossary
+
+- **Tenant:** An organization owning registered dApps, users and merchant policies.
+- **Origin:** Browser isolation identity consisting of scheme, host and optional port.
+- **Redirect/callback URI:** Full exact URL where an OAuth authorization result returns.
+- **PKCE:** Proof Key for Code Exchange, protecting authorization code redemption.
+- **RPC:** Blockchain node/indexer interface used for reads and, where permitted, sends.
+- **Read-only adapter:** Balance/network viewer without an enabled wallet signing API.
+- **Wallet browser vault:** Protected local signing material managed within the browser/device origin; distinct from server PHP private files.
+- **Installer lock:** Server-side marker refusing repeat initial setup.
+- **Idempotent payment:** Retrying the same request with the same immutable inputs does not create an additional logical order/payment.
+- **Reconciliation:** Server-side independent verification of blockchain payment settlement.
+- **Softaculous custom script:** A distinct host-admin managed installation package with Softaculous's own metadata and lifecycle callbacks.
+
+
+**End of tutorial.**  
+**Release caution:** Use the integrated v0.9 Phase B system only in a controlled staging environment until the explicit release gates and independent security audit are passed. Treat the current v1.0 installer as a candidate requiring further work; do not enable Mainnet or customer custody because the installation page renders successfully.
